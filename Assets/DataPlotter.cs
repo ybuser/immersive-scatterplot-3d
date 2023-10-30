@@ -7,10 +7,12 @@ public class DataPlotter : MonoBehaviour
 {
     public string inputfile;
     private List<Dictionary<string, object>> pointList; // List for holding data from CSV reader
+    private Dictionary<string, Color> stateToColorMap = new Dictionary<string, Color>(); // Dictionary to map "State"s to colors
+
     
-    public int columnX = 0;
-    public int columnY = 1;
-    public int columnZ = 2;
+    public int columnX = 7;
+    public int columnY = 8;
+    public int columnZ = 9;
     public string xName;
     public string yName;
     public string zName;
@@ -18,7 +20,13 @@ public class DataPlotter : MonoBehaviour
 
     public GameObject PointPrefab;
     public GameObject PointHolder;
-    
+    public GameObject AxisPrefab;
+    public GameObject LabelPrefab;
+//
+    private Dictionary<string, GameObject> nameToPointMap = new Dictionary<string, GameObject>();
+
+//
+
     void Start () {
         pointList = CSVReader.Read(inputfile);
         Debug.Log(pointList);
@@ -39,37 +47,127 @@ public class DataPlotter : MonoBehaviour
         float yMin = FindMinValue(yName);
         float zMin = FindMinValue(zName);
 
+        HashSet<string> uniqueStates = new HashSet<string>();
+        foreach (var point in pointList) {
+            uniqueStates.Add(point["State"].ToString());
+        }
+
+        float hueIncrement = 1.0f / uniqueStates.Count;
+        float currentHue = 0;
+        foreach (string state in uniqueStates) {
+            stateToColorMap[state] = Color.HSVToRGB(currentHue, 1, 1);
+            currentHue += hueIncrement;
+        }
+
+
         for (var i = 0; i < pointList.Count; i++) {
             // normalized
-            float x = (System.Convert.ToSingle(pointList[i][xName]) - xMin) / (xMax - xMin);
-            float y = (System.Convert.ToSingle(pointList[i][yName]) - yMin) / (yMax - yMin);
-            float z = (System.Convert.ToSingle(pointList[i][zName]) - zMin) / (zMax - zMin);
-            
-            GameObject dataPoint = Instantiate(PointPrefab, new Vector3(x, y, z)* plotScale, Quaternion.identity);
-            dataPoint.transform.parent = PointHolder.transform;
-            string dataPointName = pointList[i][xName] + " " + pointList[i][yName] + " " + pointList[i][zName];
-            dataPoint.transform.name = dataPointName;
-            dataPoint.GetComponent<Renderer>().material.color = new Color(x,y,z, 1.0f);
+            float x = NormalizeValue(System.Convert.ToSingle(pointList[i][xName]), xMin, xMax);
+            float y = NormalizeValue(System.Convert.ToSingle(pointList[i][yName]), yMin, yMax);
+            float z = NormalizeValue(System.Convert.ToSingle(pointList[i][zName]), zMin, zMax);
+
+            // Use "Site Num" as unique identifier
+            string dataName = pointList[i]["Site Num"].ToString();
+
+//
+
+            if (!nameToPointMap.ContainsKey(dataName)) {
+                GameObject dataPoint = Instantiate(PointPrefab, new Vector3(x, y, z) * plotScale, Quaternion.identity);
+                dataPoint.transform.parent = PointHolder.transform;
+                string dataPointName = pointList[i][xName] + " " + pointList[i][yName] + " " + pointList[i][zName];
+                dataPoint.transform.name = dataPointName;
+                string state = pointList[i]["State"].ToString();
+                if (stateToColorMap.ContainsKey(state)) {
+                    dataPoint.GetComponent<Renderer>().material.color = stateToColorMap[state];
+                } else {
+                    dataPoint.GetComponent<Renderer>().material.color = Color.black; // Default color if state is not in the dictionary for some reason
+                }
+
+                nameToPointMap[dataName] = dataPoint;
+            }
+            else {
+                GameObject dataPoint = nameToPointMap[dataName];
+                PointAnimation pointAnim = dataPoint.GetComponent<PointAnimation>();
+                if (pointAnim == null)
+                {
+                    pointAnim = dataPoint.AddComponent<PointAnimation>();
+                }
+                // pointAnim.Positions.Add(new Vector3(x, y, z) * plotScale);
+                pointAnim.positionsList.Add(new Vector3(x, y, z) * plotScale); // Assuming PointAnimation has a property called "positionsList"
+            }
+//
         }
-        // GameObject.Find("5.1 3.5 1.4").GetComponent<TextMesh>().text = xName;
+        CreateAxisAndLabels();
     }
 
     private float FindMaxValue(string columnName) {
         float maxValue = Convert.ToSingle(pointList[0][columnName]);
-        for (var i = 0; i < pointList.Count; i++) {
-            if (maxValue < Convert.ToSingle(pointList[i][columnName]))
-                maxValue = Convert.ToSingle(pointList[i][columnName]);
+
+        for (var i = 1; i < pointList.Count; i++) {
+            try
+            {
+                if (maxValue < Convert.ToSingle(pointList[i][columnName]))
+                    maxValue = Convert.ToSingle(pointList[i][columnName]);
+            }
+            catch (FormatException e)
+            {
+                Debug.LogError($"Error parsing {pointList[i][columnName]} from column {columnName}");
+                throw e;
+            }
         }
         return maxValue;
     }
 
     private float FindMinValue(string columnName) {
         float minValue = Convert.ToSingle(pointList[0][columnName]);
-        for (var i = 0; i < pointList.Count; i++) {
-            if (Convert.ToSingle(pointList[i][columnName]) < minValue)
-                minValue = Convert.ToSingle(pointList[i][columnName]);
-        }
-       return minValue;
-   }
 
+        for (var i = 1; i < pointList.Count; i++) {
+            try
+            {
+                if (Convert.ToSingle(pointList[i][columnName]) < minValue)
+                    minValue = Convert.ToSingle(pointList[i][columnName]);
+            }
+            catch (FormatException e)
+            {
+                Debug.LogError($"Error parsing {pointList[i][columnName]} from column {columnName}");
+                throw e;
+            }
+        }
+        return minValue;
+    }
+
+    private float NormalizeValue(float value, float minValue, float maxValue) {
+        if (maxValue - minValue == 0) return 0.5f; // Return a default value, since it's a constant value
+        return (value - minValue) / (maxValue - minValue);
+    }
+
+    void CreateAxisAndLabels()
+    {
+        float axisLength = plotScale + 2; // or any value you find suitable
+
+        // X Axis
+        GameObject xAxis = Instantiate(AxisPrefab, new Vector3(axisLength / 2, 0, 0), Quaternion.identity);
+        xAxis.transform.localScale = new Vector3(axisLength, 0.1f, 0.1f);
+        CreateLabel(new Vector3(axisLength, 0, 0), xName);
+
+        // Y Axis
+        GameObject yAxis = Instantiate(AxisPrefab, new Vector3(0, axisLength / 2, 0), Quaternion.identity);
+        yAxis.transform.localScale = new Vector3(0.1f, axisLength, 0.1f);
+        CreateLabel(new Vector3(0, axisLength, 0), yName);
+
+        // Z Axis
+        GameObject zAxis = Instantiate(AxisPrefab, new Vector3(0, 0, axisLength / 2), Quaternion.identity);
+        zAxis.transform.localScale = new Vector3(0.1f, 0.1f, axisLength);
+        CreateLabel(new Vector3(0, 0, axisLength), zName);
+    }
+
+    void CreateLabel(Vector3 position, string labelText)
+    {
+        GameObject label = Instantiate(LabelPrefab, position, Quaternion.identity);
+        TextMesh tMesh = label.GetComponent<TextMesh>();
+        if (tMesh != null)
+        {
+            tMesh.text = labelText;
+        }
+    }
 }
